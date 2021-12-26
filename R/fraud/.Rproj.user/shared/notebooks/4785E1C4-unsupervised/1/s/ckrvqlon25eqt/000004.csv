@@ -1,0 +1,4 @@
+"0","pca = prcomp(scaled_train, scale=FALSE, center=FALSE)"
+"0","pca_data_train = data.frame(predict(pca, newdata = scaled_train))"
+"0","#pca_data_train = asin(sqrt((pca_data_train - min(pca_data_train)) / (max(pca_data_train) - min(pca_data_train))))"
+"0","pca_data_train"

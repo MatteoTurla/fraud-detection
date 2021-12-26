@@ -1,0 +1,107 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(gplots)
+library(ggplot2)
+library(ggpubr)
+library(lubridate)
+library(tidyverse)
+```
+
+```{r}
+rm(list = ls())
+data = read_csv("../data.csv")
+str(data)
+```
+
+number of genuine vs fraudulent transactions
+```{r}
+sum(data$TX_FRAUD)
+sum(data$TX_FRAUD) / dim(data)[1]
+
+dim(data)[1] - sum(data$TX_FRAUD)
+(dim(data)[1] - sum(data$TX_FRAUD)) / dim(data)[1]
+```
+
+daily exploration
+
+
+```{r}
+tx_byday = data %>%
+            mutate(day = as.Date(TX_DATETIME)) %>%
+            group_by(day) %>%
+            summarise(
+                n_transactions = n(),
+                n_fraud = sum(TX_FRAUD),
+                mean_amount = mean(TX_AMOUNT)
+            )
+head(tx_byday)
+summary(tx_byday)
+ggplot(data = tx_byday) +
+    geom_line(mapping = aes(x=day, y=n_fraud, color="# fraud transaction by day")) +
+    geom_line(mapping = aes(x=day, y=n_transactions/50, color="# transaction by day / 50")) +
+    labs(x="Date", y="Number of transaction") +
+    scale_x_date(date_breaks = "1 month") 
+```
+to explore the distribution of transactions and amount based on hour and week-day it will be used a sample of the first week: from Sunday 2018-05-06 to Saturday 2018-05-12
+
+```{r}
+week_data = data[
+  as.Date(data$TX_DATETIME) >= as.Date("2018-05-06") &
+    as.Date(data$TX_DATETIME) <= as.Date("2018-05-12"), 
+  ]
+
+tx_time_exploration = week_data %>%
+  mutate(hour = hour(TX_DATETIME), day = wday(TX_DATETIME))
+
+hour_exploration = tx_time_exploration %>% group_by(hour) %>%
+  summarise(
+    n_transactions = n(),
+    mean_amount = mean(TX_AMOUNT),
+    n_frauds = sum(TX_FRAUD)
+  )
+hour_exploration
+day_exploration = tx_time_exploration %>% group_by(day) %>%
+  summarise(
+    n_transactions = n(),
+    mean_amount = mean(TX_AMOUNT),
+    n_frauds = sum(TX_FRAUD)
+  )
+day_exploration
+a = ggplot(data=hour_exploration) +
+    geom_col(mapping=aes(x=hour, y=n_transactions / 50)) +
+    labs(x="Hour", y="Number of transactions")
+b = ggplot(data=hour_exploration) +
+    geom_col(mapping=aes(x=hour, y=n_frauds)) +
+  labs(x="Hour", y="Number of frauds")
+
+
+c = ggplot(data=day_exploration) +
+    geom_col(mapping=aes(x=day, y=n_transactions / 50)) +
+    labs(x="Day", y="Number of transactions")
+
+d = ggplot(data=day_exploration) +
+    geom_col(mapping=aes(x=day, y=n_frauds)) +
+  labs(x="Day", y="Number of frauds")
+
+ggarrange(a, b, c, d, ncol =2, nrow = 2)
+
+ggplot(data=hour_exploration) +
+    geom_col(mapping=aes(x=hour, y=mean_amount)) +
+    labs(x="Hour", y="Mean transaction amount")
+
+ggplot(data=day_exploration) +
+    geom_col(mapping=aes(x=day, y=mean_amount)) +
+    labs(x="Day", y="Mean transaction amount")
+```
+
+transaction amount exploration
+
+```{r}
+summary(data$TX_AMOUNT)
+ggplot(data=data[sample(nrow(data),10000),], mapping=aes(x=TX_AMOUNT, color=as.factor(TX_FRAUD))) + geom_density()
+plotmeans(TX_AMOUNT ~ TX_FRAUD, data=data[sample(nrow(data),10000),], frame = FALSE, xlab="Fraud", ylab="Transaction amount") 
+```
+

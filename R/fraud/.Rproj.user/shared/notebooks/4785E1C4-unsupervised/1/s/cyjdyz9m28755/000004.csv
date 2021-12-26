@@ -1,0 +1,2 @@
+"0","cluster_data = pca_data_train[, 1:n_comp] %>% sample_n(1000)"
+"0","cluster_data"

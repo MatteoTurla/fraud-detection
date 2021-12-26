@@ -1,0 +1,26 @@
+{
+    "id": "E1268F3E",
+    "path": "~/universita/stas_learning_assignment/exam/R/fraud/exploration.Rmd",
+    "project_path": "exploration.Rmd",
+    "type": "r_markdown",
+    "hash": "1399851765",
+    "contents": "",
+    "dirty": false,
+    "created": 1625573535722.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "tempName": "Untitled1",
+        "chunk_output_type": "inline",
+        "cursorPosition": "14,20",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1625573687,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1625573687925,
+    "read_only": false,
+    "read_only_alternatives": []
+}

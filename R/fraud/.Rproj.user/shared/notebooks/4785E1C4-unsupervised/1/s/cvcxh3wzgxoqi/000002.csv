@@ -1,0 +1,1 @@
+"0","pca_data_test = data.frame(predict(pca, newdata = scaled_test))"

@@ -1,0 +1,4 @@
+"0","for (col in colnames(scaled_train)) {"
+"0","  print(ggplot(data = scaled_train, mapping=aes_string(x=col)) + geom_density())"
+"0","}"
+"0",""

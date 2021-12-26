@@ -1,0 +1,1 @@
+"0","clustering <- kmeans(cluster_data[, 1:n_comp], centers = 6, nstart = 20)"

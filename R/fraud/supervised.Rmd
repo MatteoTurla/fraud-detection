@@ -1,0 +1,327 @@
+---
+title: "modelling"
+output: html_modelling
+---
+
+In this notebook it is cross validate different model and then estimate the
+generalization error on one week test set (more or less 70k transactions)
+
+```{r}
+#rm(list = ls())
+library(tidyverse)
+library(caret)
+source("metrics.R")
+set.seed(42)
+```
+
+```{r}
+data = data.frame(readRDS("data_transformed.rds"))
+# add a target factor
+data$target = factor(data$TX_FRAUD, labels = c("no", "yes"))
+head(data)
+class(data)
+```
+before tuning different model and evaluate their performance it is introduced prequential CV -> cross validation for streming data.
+
+The splits must follow the datetime order to avoid temporal leakage.
+
+We have a time span for validate and tune the model, then the performance of the test model are evaluated on a test set.
+
+for example 01-june to 31-june used to validate the model, the best model then is train on 1-july to 7-july and then tested from 14-july to 21-july. 1 week of data si about 60k transactions.
+
+also the model is train 2 week before the test to account for the data drift concept in streming data
+
+```{r}
+prequential_cv = function(df, 
+                          starting_date,
+                          n_fold,
+                          train_delta, delay_delta, test_delta
+                          ) {
+
+  # compute time span needed
+  time_span = test_delta * (n_fold - 1) + train_delta + delay_delta + test_delta
+  
+  print("time span in days")
+  print(time_span)
+
+  starting_date = as.Date(starting_date)
+  folds = list()
+  for (f in 1:n_fold) {
+      idx_train = df[
+        as.Date(df$TX_DATETIME) >= starting_date & as.Date(df$TX_DATETIME) < starting_date + train_delta,
+        "TRANSACTION_ID"
+      ]
+      val_date = starting_date + train_delta + delay_delta
+      val_idx = df[
+        as.Date(df$TX_DATETIME) >= val_date & as.Date(df$TX_DATETIME) < val_date + test_delta,
+        "TRANSACTION_ID"
+      ]
+      starting_date = starting_date + test_delta
+      folds[[f]]= list(idx_train, val_idx)
+  }
+  return(list(folds, time_span))
+}
+
+starting_date = as.Date("2018-06-10")
+
+delta_train = 7 # 1 week of train data
+delta_delay = 7 # 1 week of delay
+delta_test = 7 # 1 week of test data
+
+l = prequential_cv(data, starting_date, 3, 7, 7, 7)
+```
+```{r}
+time_span = l[[2]] # time span required to do cross validation
+folds = l[[1]]
+
+i = 0
+for(fold in folds) {
+  print("---------------")
+  print("fold number")
+  print(i)
+  train_idx = fold[[1]]
+  val_idx = fold[[2]]
+  
+  print("number of training example")
+  print(length(train_idx))
+  
+  print("number of validation example")
+  print(length(val_idx))
+  
+  print("number of fraud train")
+  print(sum(data[train_idx, "TX_FRAUD"]))
+  
+  print("number of fraud val")
+  print(sum(data[val_idx, "TX_FRAUD"]))
+  
+  i = i + 1
+}
+
+
+hold_out_train = data[
+  as.Date(data$TX_DATETIME) >= starting_date + time_span &
+    as.Date(data$TX_DATETIME) < starting_date + time_span + delta_train
+  , ]
+
+hold_out_test = data[
+  as.Date(data$TX_DATETIME) >= starting_date + time_span + delta_train + delta_delay &
+    as.Date(data$TX_DATETIME) < starting_date + time_span + delta_train + delta_delay + delta_test
+  , ]
+
+print("-------------")
+print("hold out dim")
+print(dim(hold_out_train))
+print(dim(hold_out_test))
+print("number of fraud train")
+print(sum(hold_out_train[, "TX_FRAUD"]))
+print("number of fraud test")
+print(sum(hold_out_test[, "TX_FRAUD"]))
+```
+
+# validate different models
+
+
+```{r}
+features = c("TX_AMOUNT", 
+             "n_tx_1", "n_tx_7", "n_tx_30", 
+             "avg_tx_1", "avg_tx_7" , "avg_tx_30" , 
+             "n_tx_terminal_1", "n_tx_terminal_7" , "n_tx_terminal_30" , 
+             "tx_terminal_risk_1" , "tx_terminal_risk_7" , "tx_terminal_risk_30" ,
+             "tx_weekend" , "tx_night"
+             )
+print("n features")
+print(length(features))
+
+features = c(features, "target")
+```
+# random forest
+
+```{r}
+
+grid = list(
+   mtry = c(5,10,15),
+   maxnodes = c(2,4,8,16),
+   ap_train = 0,
+   ap_val = 0,
+   sd_train = 0,
+   sd_val = 0
+     ) %>% cross_df()
+
+grid
+
+
+for(i in 1:nrow(grid)) {
+  print("fold done")
+  score_train = c()
+  score_val = c()
+  for(fold in folds) {
+    train_idx = fold[[1]]
+    val_idx = fold[[2]]
+    
+    train_data = data[train_idx, ] %>% sample_n(10000) # only for reduce time
+    val_data = data[val_idx, ] %>% sample_n(10000)
+    
+    model <- train(
+      target ~ ., 
+      data = train_data[, features],
+      method = "rf",               
+      trControl = trainControl(method = "none", classProbs = TRUE),
+      tuneGrid = data.frame(mtry = grid[[i, "mtry"]]),
+      maxnodes=grid[[i, "maxnodes"]]
+    )
+    
+    p_train = predict(model, train_data[, features], type="prob")
+    p_val = predict(model, val_data[, features], type="prob") 
+  
+    train_data$prob_prediction = p_train[,2]
+    val_data$prob_prediction = p_val[, 2]
+    
+    
+    ap_train = average_precision(train_data, target, prob_prediction, event_level = "second")
+    ap_val = average_precision(val_data, target, prob_prediction, event_level = "second")
+    
+    score_train = c(score_train, ap_train[[1, ".estimate"]])
+    score_val = c(score_val, ap_val[[1, ".estimate"]])
+    
+    
+  
+  }
+  
+  grid[i , "ap_train"] = mean(score_train)
+  grid[i , "ap_val"] = mean(score_val)
+  grid[i , "sd_train"] = sd(score_train)
+  grid[i , "sd_val"] = sd(score_val)
+  
+}
+
+```
+
+```{r}
+grid
+best_par = grid %>% slice_max(order_by = ap_val, n=1, with_ties = FALSE)
+best_par
+```
+
+train model on hould and test performance
+```{r}
+model <- train(
+      target ~ ., 
+      data = hold_out_train[, features],
+      method = "rf",               
+      trControl = trainControl(method = "none", classProbs = TRUE),
+      tuneGrid = data.frame(mtry = best_par[[1, "mtry"]]),
+      maxnodes = best_par[[1, "mtry"]]
+    )
+
+p_train = predict(model, hold_out_train[, features], type="prob")
+p_test = predict(model, hold_out_test[, features], type="prob") 
+
+hold_out_train$prob_prediction = p_train[,2]
+hold_out_test$prob_prediction = p_test[, 2]
+performance(hold_out_train, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+performance(hold_out_test, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+
+```
+
+
+```{r}
+
+grid = list(
+  C = c(1,10,100,1000),
+  gamma = c(0.001, 0.0001),
+     ap_train = 0,
+     ap_val = 0,
+     sd_train = 0,
+     sd_val = 0
+     ) %>% cross_df()
+
+grid
+
+
+for(i in 1:nrow(grid)) {
+  print("fold done")
+  score_train = c()
+  score_val = c()
+  for(fold in folds) {
+    train_idx = fold[[1]]
+    val_idx = fold[[2]]
+
+    train_data = data[train_idx, ] %>% sample_n(10000)
+    val_data = data[val_idx, ] %>% sample_n(10000)
+
+    model <- train(
+      target ~ ., 
+      data = train_data[, features],
+      method = "svmRadial",               
+      trControl = trainControl(method = "none", classProbs = TRUE),
+      tuneGrid = data.frame(C = grid[[i, "C"]], sigma = grid[[i, "gamma"]])
+    )
+    
+    p_train = predict(model, train_data[, features], type="prob")
+    p_val = predict(model, val_data[, features], type="prob") 
+  
+    train_data$prob_prediction = p_train[,2]
+    val_data$prob_prediction = p_val[, 2]
+    
+    
+    ap_train = average_precision(train_data, target, prob_prediction, event_level = "second")
+    ap_val = average_precision(val_data, target, prob_prediction, event_level = "second")
+    
+    score_train = c(score_train, ap_train[[1, ".estimate"]])
+    score_val = c(score_val, ap_val[[1, ".estimate"]])
+    
+    
+  
+  }
+  
+  grid[i , "ap_train"] = mean(score_train)
+  grid[i , "ap_val"] = mean(score_val)
+  grid[i , "sd_train"] = sd(score_train)
+  grid[i , "sd_val"] = sd(score_val)
+  
+}
+
+best_par = grid %>% slice_max(order_by = ap_val, n=1, with_ties = FALSE)
+best_par
+
+```
+
+
+```{r}
+
+model <- train(
+      target ~ ., 
+      data = hold_out_train[, features],
+      method = "svmRadial",               
+      trControl = trainControl(method = "none", classProbs = TRUE),
+      tuneGrid = data.frame(C = best_par[[1, "C"]], sigma = best_par[[1, "gamma"]])
+    )
+
+p_train = predict(model, hold_out_train[, features], type="prob")
+p_test = predict(model, hold_out_test[, features], type="prob") 
+
+hold_out_train$prob_prediction = p_train[,2]
+hold_out_test$prob_prediction = p_test[, 2]
+performance(hold_out_train, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+performance(hold_out_test, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+
+```
+
+```{r}
+test_prediction = predict(model, hold_out_test[, features]) 
+test_true = hold_out_test$target
+confusionMatrix(test_prediction, test_true, mode="prec_recall", positive = "yes")
+```
+
+
+
+so this are our baseline model, it is possible to tune also more e sophisticated model but the time required to do so is pretty high.
+
+```{r}
+#dummy classifier
+hold_out_train$prob_prediction = 0.5
+hold_out_test$prob_prediction = 0.5
+performance(hold_out_train, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+performance(hold_out_test, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+```
+

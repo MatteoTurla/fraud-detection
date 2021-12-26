@@ -1,0 +1,6 @@
+"0","## find mean and sd column-wise of training data"
+"0","trainMean <- apply(train_data,2,mean)"
+"0","trainSd <- apply(train_data,2,sd)"
+"0",""
+"0","scaled_train = data.frame(scale(train_data, center=trainMean, scale=trainSd))"
+"0","scaled_test = data.frame(scale(test_data, center=trainMean, scale=trainSd))"

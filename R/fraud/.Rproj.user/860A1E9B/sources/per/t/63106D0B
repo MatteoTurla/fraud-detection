@@ -1,0 +1,23 @@
+{
+    "id": "63106D0B",
+    "path": "~/universita/stas_learning_assignment/exam/R/fraud/xgbioost.Rmd",
+    "project_path": "xgbioost.Rmd",
+    "type": "r_markdown",
+    "hash": "3881727127",
+    "contents": "",
+    "dirty": false,
+    "created": 1625574628209.0,
+    "source_on_save": false,
+    "relative_order": 6,
+    "properties": {
+        "chunk_output_type": "inline"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1625471975,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1625471975,
+    "read_only": false,
+    "read_only_alternatives": []
+}

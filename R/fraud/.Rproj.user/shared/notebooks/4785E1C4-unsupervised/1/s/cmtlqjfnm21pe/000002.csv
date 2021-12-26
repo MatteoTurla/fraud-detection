@@ -1,0 +1,5 @@
+"0","center = as.matrix(clustering$centers)"
+"0","min_distance = function(point) {"
+"0","  diff = sweep(center, 2, point, ""-"") # subtract"
+"0","  min(sqrt(rowSums(diff ^ 2, 2)))"
+"0","}"

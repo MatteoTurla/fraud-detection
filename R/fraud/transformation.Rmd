@@ -1,0 +1,141 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(runner)
+```
+
+```{r}
+data = read_csv("../data.csv")
+str(data)
+```
+ runner functionality test over one customer
+ 
+```{r}
+c0 = data[data["CUSTOMER_ID"] == 0, ]
+c0 = c0[order(c0$TX_DATETIME), ]
+head(c0)
+
+count_tx = function(x) {
+  length(x)
+}
+
+avg_tx = function(x) {
+  mean(x)
+}
+# example of costumer trasformation feature
+# sliding window of differnt days, including current ransaction to analyse
+c0 %>% group_by(CUSTOMER_ID) %>%
+  mutate(
+    n_tx_1 = runner(TRANSACTION_ID, k="24 hour",
+                    idx = TX_DATETIME, 
+                    f = count_tx, na_pad=FALSE),
+    avg_tx_1 = runner(TX_AMOUNT, k="24 hour",
+                    idx = TX_DATETIME, 
+                    f = avg_tx, na_pad=FALSE)
+    )
+```
+Customer features
+```{r}
+
+data = data[order(data$TX_DATETIME), ]
+data_customer = data %>% group_by(CUSTOMER_ID) %>%
+  mutate(
+    n_tx_1 = runner(TRANSACTION_ID, k="24 hour", # 1 day
+                    idx = TX_DATETIME, 
+                    f = count_tx),
+    n_tx_7 = runner(TRANSACTION_ID, k="168 hour", # 7days 
+                    idx = TX_DATETIME, 
+                    f = count_tx),
+    n_tx_30 = runner(TRANSACTION_ID, k="720 hour", # 30 days
+                    idx = TX_DATETIME, 
+                    f = count_tx),
+    avg_tx_1 = runner(TX_AMOUNT, k="24 hour", # 1 day
+                    idx = TX_DATETIME, 
+                    f = avg_tx),
+    avg_tx_7 = runner(TX_AMOUNT, k="168 hour", # 7days 
+                    idx = TX_DATETIME, 
+                    f = avg_tx),
+    avg_tx_30 = runner(TX_AMOUNT, k="720 hour", # 30 days
+                    idx = TX_DATETIME, 
+                    f = avg_tx)
+    
+  ) %>% ungroup()
+
+head(data_customer)
+```
+terminal id features
+
+```{r}
+count_fraud = function(x) {
+  sum(x)
+}
+
+data_customer_terminal = data_customer %>% 
+  group_by(TERMINAL_ID) %>%
+  mutate(
+    n_tx_terminal_1 = runner(TRANSACTION_ID, k="24 hour", lag="168 hour", # 1 day window, 7 days delay
+                    idx = TX_DATETIME, 
+                    f = count_tx),
+    n_tx_terminal_7 = runner(TRANSACTION_ID, k="168 hour", lag="168 hour",  # 7days window, 7 days delay 
+                    idx = TX_DATETIME, 
+                    f = count_tx),
+    n_tx_terminal_30 = runner(TRANSACTION_ID, k="720 hour", lag="168 hour", # 30 days window, 7 days lag
+                    idx = TX_DATETIME, 
+                    f = count_tx),
+    n_fraud_terminal_1 = runner(TX_FRAUD, 
+                    k="24 hour", lag="168 hour", # 1 day window, 7 days delay
+                    idx = TX_DATETIME, 
+                    f = count_fraud),
+    n_fraud_terminal_7 = runner(TX_FRAUD, 
+                    k="168 hour", lag="168 hour",  # 7days window, 7 days delay 
+                    idx = TX_DATETIME, 
+                    f = count_fraud),
+    n_fraud_terminal_30 = runner(TX_FRAUD, 
+                    k="720 hour", lag="168 hour", # 30 days window, 7 days lag
+                    idx = TX_DATETIME, 
+                    f = count_fraud)
+    
+  ) %>% ungroup()
+```
+
+```{r}
+data_customer_terminal
+```
+```{r}
+# compute terminal risk
+
+data_all = data_customer_terminal %>%
+  mutate(
+    tx_terminal_risk_1 = ifelse(n_tx_terminal_1==0, 0, n_fraud_terminal_1 / n_tx_terminal_1),
+    tx_terminal_risk_7 = ifelse(n_tx_terminal_7==0, 0, n_fraud_terminal_7 / n_tx_terminal_7),
+    tx_terminal_risk_30 = ifelse(n_tx_terminal_30==0, 0, n_fraud_terminal_30 / n_tx_terminal_30)
+  ) %>% ungroup()
+data_all
+```
+```{r}
+class(data_all)
+```
+
+
+Date time features 
+
+```{r}
+library(lubridate)
+data_all = data_all %>%
+  mutate(
+    tx_weekend = ifelse(wday(TX_DATETIME) == 0 | wday(TX_DATETIME) == 6, 1, 0),
+    tx_night = ifelse(hour(TX_DATETIME) >= 0 & hour(TX_DATETIME) <= 6, 1, 0)
+  )
+data_all  
+```
+
+
+```{r}
+saveRDS(data_all, "data_transformed.rds")
+```
+

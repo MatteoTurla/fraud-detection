@@ -1,0 +1,212 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# xgboost as final model
+
+```{r}
+rm(list = ls())
+library(caret)
+library(tidyverse)
+source("metrics.R")
+source("utils.R")
+set.seed(42)
+```
+
+```{r}
+data = data.frame(readRDS("data_transformed.rds"))
+# add a target factor
+data$target = factor(data$TX_FRAUD, labels = c("no", "yes"))
+head(data)
+class(data)
+```
+
+```{r}
+starting_date = as.Date("2018-06-10")
+
+delta_train = 7 # 1 week of train data
+delta_delay = 7 # 1 week of delay
+delta_test = 7 # 1 week of test data
+
+l = prequential_cv(data, starting_date, 3, 7, 7, 7)
+folds = l[[1]]
+```
+
+```{r}
+features = c("TX_AMOUNT", 
+             "n_tx_1", "n_tx_7", "n_tx_30", 
+             "avg_tx_1", "avg_tx_7" , "avg_tx_30" , 
+             "n_tx_terminal_1", "n_tx_terminal_7" , "n_tx_terminal_30" , 
+             "tx_terminal_risk_1" , "tx_terminal_risk_7" , "tx_terminal_risk_30" ,
+             "tx_weekend" , "tx_night"
+             )
+print("n features")
+print(length(features))
+
+#features = c(features, "target")
+```
+
+
+
+```{r}
+library(xgboost)
+```
+
+```{r warning=FALSE}
+grid = list(
+  max_depth = c(3,5,7),
+  gamma = c(0.3),
+  lambda=c(5),
+  eta = c(0.1),
+  min_child_weight = c(1),
+  nround = c(300),
+  
+   ap_train = 0,
+   ap_val = 0,
+   sd_train = 0,
+   sd_val = 0,
+   ntree = 0
+     ) %>% cross_df()
+
+grid
+
+
+for(i in 1:nrow(grid)) {
+  # cross val only one metric
+  print("fold start")
+  
+  score_train = c()
+  score_val = c()
+  ntree = c()
+  
+  for(fold in folds) {
+    train_idx = fold[[1]]
+    val_idx = fold[[2]]
+    
+    train_data = data[train_idx, ] %>% sample_n(5000)
+    val_data = data[val_idx, ]
+    
+    dtrain = xgb.DMatrix(data = as.matrix(train_data[, features]), label=train_data$TX_FRAUD)
+    dval = xgb.DMatrix(data = as.matrix(val_data[, features]), label=val_data$TX_FRAUD)
+    
+     watchlist = list(train=dtrain, test=dval)
+     model = xgb.train(data=dtrain, 
+                      watchlist=watchlist, objective = "binary:logistic",
+                      evalmetrc="aucpr",
+                      early_stopping_rounds = 10,
+                      eta = grid[[i,"eta"]],
+                      gamma = grid[[i, "gamma"]],
+                      max_depth = grid[[i,"max_depth"]],
+                      min_child_weight = grid[[i, "min_child_weight"]],
+                      nround = grid[[i, "nround"]],
+                      lambda = grid[[i, "lambda"]],
+                      scale_pos_weight = sum(train_data$TX_FRAUD == 0) / sum(train_data$TX_FRAUD == 1),
+                      verbose=0
+                      )
+
+    p_train = predict(model, dtrain)
+    p_val = predict(model, dval) 
+
+  
+    train_data$prob_prediction = p_train
+    val_data$prob_prediction = p_val
+    
+    
+    ap_train = average_precision(train_data, target, prob_prediction, event_level = "second")
+    ap_val = average_precision(val_data, target, prob_prediction, event_level = "second")
+    
+    score_train = c(score_train, ap_train[[1, ".estimate"]])
+    score_val = c(score_val, ap_val[[1, ".estimate"]])
+     ntree = c(ntree, model$niter)
+    
+  
+  }
+  
+  grid[i , "ap_train"] = mean(score_train)
+  grid[i , "ap_val"] = mean(score_val)
+  grid[i , "sd_train"] = sd(score_train)
+  grid[i , "sd_val"] = sd(score_val)
+  
+  grid[i , "ntree"] = mean(ntree)
+  
+  print(grid[i,])
+  
+}
+```
+```{r}
+best_parms = grid[grid$ap_val >= max(grid$ap_val) -0.01, ]
+saveRDS(best_parms, "xgboost.rds")
+best_parms
+```
+
+```{r}
+best_parms = readRDS("xgboost.rds")
+best_parm = best_parms[order(best_parms$ap_val, decreasing = TRUE),]
+best_parm
+```
+
+
+
+Let's evaluate the model on the hold out tets
+
+```{r}
+time_span = l[[2]] # time span required to do cross validation
+
+
+
+hold_out_train = data[
+  as.Date(data$TX_DATETIME) >= starting_date + time_span &
+    as.Date(data$TX_DATETIME) < starting_date + time_span + delta_train
+  , ] 
+
+hold_out_test = data[
+  as.Date(data$TX_DATETIME) >= starting_date + time_span + delta_train + delta_delay &
+    as.Date(data$TX_DATETIME) < starting_date + time_span + delta_train + delta_delay + delta_test
+  , ]
+
+```
+
+```{r}
+dtrain = xgb.DMatrix(data = as.matrix(hold_out_train[, features]), label=hold_out_train$TX_FRAUD)
+dtest = xgb.DMatrix(data = as.matrix(hold_out_test[, features]), label=hold_out_test$TX_FRAUD)
+
+model = xgboost(data=dtrain, 
+                      eta = grid[[1,"eta"]],
+                      gamma = grid[[1, "gamma"]],
+                      max_depth = grid[[1,"max_depth"]],
+                      min_child_weight = grid[[1, "min_child_weight"]],
+                      lambda = grid[[i, "lambda"]],
+                      nround = grid[[1, "ntree"]], # early stopping tree during validation
+                      scale_pos_weight = sum(hold_out_train$TX_FRAUD == 0) / sum(hold_out_train$TX_FRAUD == 1),
+                      verbose = 0
+                      )
+```
+
+```{r}
+p_train = predict(model, dtrain)
+p_test = predict(model, dtest) 
+
+
+hold_out_train$prob_prediction = p_train
+hold_out_test$prob_prediction = p_test
+
+performance(hold_out_train, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+performance(hold_out_test, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+```
+ 
+ feature importance
+ 
+```{r}
+library(vip)
+vip::vip(model) 
+```
+
+
+
+```{r}
+test_prediction = factor(as.numeric(p_test >= 0.5), label=c("no","yes"))
+test_true = hold_out_test$target
+confusionMatrix(test_prediction, test_true, mode="prec_recall", positive = "yes")
+```
+ 

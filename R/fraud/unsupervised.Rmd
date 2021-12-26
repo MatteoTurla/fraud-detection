@@ -1,0 +1,224 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# unsupervised method to perfrom anomaly detection
+
+fraud can be seen as anomaly of our data distribution of genuine transactions. unsupervised method can be used to identify anomaly by fitting various model only on genuine transactions and then use a score for each point to detect the goodness of the fitted model given the point.
+
+In particular we can use the distance from the nearest cluster if we use kmeans, or the posterior probability if we use a mixture of gaussian
+
+```{r}
+rm(list = ls())
+
+library(ggpubr)
+library(yardstick)
+library(corrplot)
+library(ggplot2)
+library(caret)
+library(e1071)
+library(tidyverse)
+
+source("metrics.R")
+
+set.seed(42)
+```
+
+```{r}
+data = data.frame(readRDS("data_transformed.rds"))
+# add a target factor
+data$target = factor(data$TX_FRAUD, labels = c("no", "yes"))
+head(data)
+class(data)
+```
+in this case it is used only a simple train test split to evalute the performance. the train is used to fit the model and select the number of cluster or mixture.
+Before dividing into this method it is important to scale the features because unsupervised emthod generally used discance metrics. It is aslo done a PCA analysis to check if we can reduce the number of features and the density ofeach variable is then checked.
+
+```{r}
+features = c("TX_AMOUNT", 
+             "n_tx_1", "n_tx_7", "n_tx_30", 
+             "avg_tx_1", "avg_tx_7" , "avg_tx_30" , 
+             "n_tx_terminal_1", "n_tx_terminal_7" , "n_tx_terminal_30", 
+             "tx_terminal_risk_1" , "tx_terminal_risk_7" , "tx_terminal_risk_30" 
+             #"tx_weekend" , "tx_night"
+             )
+
+sdate = as.Date("2018-06-10")
+
+train_data = data[as.Date(data$TX_DATETIME) >= sdate & as.Date(data$TX_DATETIME) < sdate + 7 &
+                    data$TX_FRAUD == 0, features] # only genuie transactions
+full_train = data[rownames(train_data) , ]
+
+test_data = data[as.Date(data$TX_DATETIME) >= sdate + 7 & as.Date(data$TX_DATETIME) < sdate + 7 + 7, features]
+full_test = data[rownames(test_data) , ]
+
+dim(train_data)
+dim(test_data)
+```
+
+first scale the data: be aware that the mean and sd are learnt uysing the training data,and then we apply the trasformation on the test data using the learned statistics.
+
+```{r}
+## find mean and sd column-wise of training data
+trainMean <- apply(train_data,2,mean)
+trainSd <- apply(train_data,2,sd)
+
+scaled_train = data.frame(scale(train_data, center=trainMean, scale=trainSd))
+scaled_test = data.frame(scale(test_data, center=trainMean, scale=trainSd))
+```
+
+```{r}
+summary(data$TX_AMOUNT)
+```
+
+let's plot the distribution
+
+```{r}
+for (col in colnames(scaled_train)) {
+  print(ggplot(data = scaled_train, mapping=aes_string(x=col)) + geom_density())
+}
+
+```
+
+the distribution have a very bad shape, we need to apply some transformation, in order to run efficiently kmeans or mixture of gaussian
+
+let's try to apply a pca transformation
+
+```{r}
+pca = prcomp(scaled_train, scale=FALSE, center=FALSE)
+pca_data_train = data.frame(predict(pca, newdata = scaled_train))
+#pca_data_train = asin(sqrt((pca_data_train - min(pca_data_train)) / (max(pca_data_train) - min(pca_data_train))))
+pca_data_train
+```
+
+```{r}
+for (col in colnames(pca_data_train)) {
+  print(col)
+  print(ggplot(data = pca_data_train, mapping=aes_string(x=col)) + geom_density())
+}
+```
+The trasfromed features now are a lot better.
+```{r}
+screeplot(pca)
+summary(pca)
+```
+
+```{r}
+pca_data_test = data.frame(predict(pca, newdata = scaled_test))
+```
+
+model based on distance work really well in lowd dimensional space, so we will keep only 3 number of compoents, this parameterr could be tuned.
+
+```{r}
+n_comp = 3
+```
+
+```{r}
+# Modeling packages
+library(cluster)     # for general clustering algorithms
+library(factoextra)  # for visualizing cluster results
+```
+
+```{r}
+cluster_data = pca_data_train[, 1:n_comp] %>% sample_n(1000)
+cluster_data
+```
+
+```{r}
+
+fviz_nbclust(
+  cluster_data,
+  kmeans, 
+  k.max = 25,
+  method = "wss",
+  diss = get_dist(cluster_data, method = "euclidean")
+)
+```
+```{r}
+clustering <- kmeans(cluster_data[, 1:n_comp], centers = 6, nstart = 20)
+```
+
+```{r}
+clustering$centers
+```
+
+
+```{r}
+center = as.matrix(clustering$centers)
+min_distance = function(point) {
+  diff = sweep(center, 2, point, "-") # subtract
+  min(sqrt(rowSums(diff ^ 2, 2)))
+}
+```
+
+```{r}
+train_loss = sigmoid(apply(pca_data_train[,1:n_comp], 1, min_distance))
+summary(train_loss)
+```
+
+```{r}
+test_loss = sigmoid(apply(pca_data_test[,1:n_comp], 1, min_distance))
+summary(test_loss)
+```
+
+normalize probability betwen 0 and 1 daily to compute the other measure: note normalization does not change the ordering
+
+```{r}
+full_test$p_hat = test_loss
+p_top_k(full_test, 100, "TX_FRAUD", "p_hat", "TX_DATETIME")
+card_p_top_k(full_test,100, "TX_FRAUD", "p_hat", "CUSTOMER_ID", "TX_DATETIME")
+average_precision(full_test, target, p_hat, event_level="second")
+```
+# mixture of gaussian
+
+```{r}
+library(mclust)
+```
+
+```{r}
+# Apply GMM model with 3 components
+n_comp =3
+sample_train = pca_data_train[,1:n_comp] %>% sample_n(1000)
+mog <- densityMclust(sample_train, G=5:15)
+```
+```{r}
+summary(mog)
+```
+
+
+```{r}
+#apply(predict(mog, pca_data_train[, 1:n_comp], what="cdens"),1,max)
+train_loss = 1-sigmoid(predict(mog, pca_data_train[, 1:n_comp], what="dens"))
+summary(train_loss)
+```
+
+```{r}
+#apply(predict(mog, pca_data_test[, 1:n_comp], what="cdens"),1,max)
+test_loss = 1-sigmoid(predict(mog, pca_data_test[, 1:n_comp], what="dens"))
+summary(test_loss)
+```
+
+```{r}
+full_test$p_hat = test_loss
+p_top_k(full_test,100,"TX_FRAUD","p_hat","TX_DATETIME")
+card_p_top_k(full_test,100, "TX_FRAUD", "p_hat", "CUSTOMER_ID", "TX_DATETIME")
+average_precision(full_test, target, p_hat, event_level = "second")
+```
+
+by playing with the quantile i can decide many false positive alarm deal with.
+
+```{r}
+test_prediction = factor(as.numeric(test_loss >= quantile(train_loss, 0.98)), label=c("no","yes"))
+test_true = full_test$target
+confusionMatrix(test_prediction, test_true, mode="prec_recall", positive = "yes")
+```
+
+By using unsupervised method only very different transactions can be discovered and also we have a lot of problem with false positive. However we train the model using only 1000 observations and test using 67k observations.
+
+This is an outstanding result if we consider the fact that in real life we can not label all the transactions every day.
+
+
+
+
+

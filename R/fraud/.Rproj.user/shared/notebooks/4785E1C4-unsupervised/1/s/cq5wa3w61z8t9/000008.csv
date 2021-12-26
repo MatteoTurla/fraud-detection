@@ -1,0 +1,4 @@
+"0","data = data.frame(readRDS(""data_transformed.rds""))"
+"0","# add a target factor"
+"0","data$target = factor(data$TX_FRAUD, labels = c(""no"", ""yes""))"
+"0","head(data)"

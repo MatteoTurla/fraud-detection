@@ -1,0 +1,8 @@
+"0",""
+"0","fviz_nbclust("
+"0","  cluster_data,"
+"0","  kmeans, "
+"0","  k.max = 25,"
+"0","  method = ""wss"","
+"0","  diss = get_dist(cluster_data, method = ""euclidean"")"
+"0",")"

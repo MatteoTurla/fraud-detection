@@ -1,0 +1,226 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+this notebooks is simply used to train a simple model on the train test and 
+then estimate the error on the test set. It is not used cross validation nor
+advanced technique, the goal is to test the implemented metrics.
+ 
+```{r}
+rm(list = ls())
+library(yardstick)
+library(tidyverse)
+source("metrics.R")
+```
+
+First of all we need to implement the custom metric of fraud detection system:
+
+from threhsold based (hard to tune) metrics to threshold free
+
+- daily precision at k 
+- daily card precion at k
+- Avarge precision () 
+
+to test the custom metric it is used a fake dataset:
+- 10 transaction, only one is  a fraud
+
+```{r}
+
+# only one transaction is fake
+fake_day1 = data.frame(target = numeric(10))
+fake_day1$date = as.Date("2021-01-01")
+fake_day1[1, "target"] = 1
+fake_day1$target_factor = factor(fake_day1$target)
+fake_day1$p_hat = 0.5
+# different card 
+fake_day1$customer_id = seq(1,10)
+
+# only 2 transactions are fake
+fake_day2 = data.frame(target = numeric(10))
+fake_day2$date = as.Date("2021-01-02")
+fake_day2[1:2, "target"] = 1
+fake_day2$target_factor = factor(fake_day2$target)
+fake_day2$p_hat = 0.5
+# both of same customer
+fake_day2$customer_id = seq(1,10)
+fake_day2[2, "customer_id"] = 1
+
+
+# all transaction are fake
+fake_day3 = data.frame(target = numeric(10))
+fake_day3$date = as.Date("2021-01-03")
+fake_day3[, "target"] = 1
+fake_day3$target_factor = factor(fake_day3$target)
+fake_day3$p_hat = 0.5
+# first 2 of same customer
+fake_day3$customer_id = seq(1,10)
+fake_day3[2, "customer_id"] = 1
+
+head(fake_day1)
+head(fake_day2)
+head(fake_day3)
+
+fake = rbind(fake_day1, fake_day2, fake_day3)
+head(fake)
+str(fake)
+```
+
+most important metrics are:
+
+area under the curve of precision recall curve -> also called avarge precision it does not require any threshold
+
+card precision top k -> mean over day card metric. how many card are compromised in
+the given top k alert?
+
+this 2 metrics does not require too tune any threshold
+
+```{r}
+# threshold metric
+fake$prediction = factor(as.integer(fake$p_hat >= 0.5), levels = c("0","1"))
+str(fake)
+head(fake)
+```
+
+```{r}
+pr_curve(fake_day1, p_hat, truth=target_factor, event_level="second") # p_hat >= th
+average_precision(fake_day1, target_factor, p_hat, event_level="second")
+roc_auc(fake_day1, target_factor, p_hat, event_level = "second")
+conf_mat(fake, target_factor, prediction)
+```
+Rank based metrics: assume that investigator can only check k alert at day.
+even if all predictions are correct the highest score can be less than one:
+if i have 1000 daily transactions of which 20 are fraud and the system detect all of them, then top 100 precision is 0.2
+
+- precision at k
+
+- card precision at k: group transaction by costumer the highest risk score  is a proxy for the customer card being compromised, then the investigator will check all recent transaction. This metric is usefull in comparing different model, in production we can't wait the end of the day and to group transactions of the same customer.
+
+rank metrics are computed daily and then aggregate over time using the mean
+
+```{r}
+p_top_k_day(fake_day1, 5, "target", "p_hat")
+p_top_k_day(fake_day2, 5, "target", "p_hat")
+p_top_k_day(fake_day3, 5, "target", "p_hat")
+
+p_top_k(fake, 5, "target", "p_hat", "date")
+```
+
+this means that only 20% of top_k alarm was indeeed a frauds transactions.
+
+```{r}
+card_p_top_k_day(fake_day1, 5, "target", "p_hat", "customer_id")
+# shoulkd be the same of precision top k
+card_p_top_k_day(fake_day2, 5, "target", "p_hat", "customer_id") 
+# only one card compromised, result should be 1 / k
+card_p_top_k_day(fake_day3, 5, "target", "p_hat", "customer_id")
+# should return also transaction of costumer 6 and not only 1 to 5 
+
+card_p_top_k(fake, 5, "target", "p_hat", "customer_id", "date")
+```
+
+All implemented metrics are fine.
+
+in the following w will construct a basic model and compute:
+
+- AUC ROC
+- average precision
+- precision top k
+- card precision top k
+- confusion matrix
+
+
+
+```{r}
+data = data.frame(readRDS("data_transformed.rds"))
+
+# add a target factor
+data$target = factor(data$TX_FRAUD)
+head(data)
+class(data)
+```
+now it is constructed a simple model, because we are using data indexed by datetime, we should split according to it:
+
+- train on data before a certain date
+- test on data after a certain date
+- between this two dates we need to account for a certain delay period
+
+this to avoid temporal lakage in the model.
+
+Temporal lakage is also a problem of cross-validation so we need to use a similar technique adapted to streaming data.
+
+```{r}
+start = as.Date("2018-07-25")
+
+delta_train = 7 # 1 week of train data
+delta_delay = 7 # 1 week of delay
+delta_test = 7 # 1 week of test data
+
+train = data[
+  as.Date(data$TX_DATETIME) >= start & as.Date(data$TX_DATETIME) < start + delta_train,
+  ]
+
+test_start = start + delta_train + delta_delay
+test = data[
+  as.Date(data$TX_DATETIME) >= test_start & as.Date(data$TX_DATETIME) < test_start + delta_test,
+  ]
+
+print("split dim")
+dim(train)
+dim(test)
+
+print("fraud in train and test set")
+sum(train$TX_FRAUD) / dim(train)[1]
+sum(test$TX_FRAUD) / dim(test)[1]
+```
+
+
+
+```{r}
+features = c("TX_AMOUNT", 
+             "n_tx_1", "n_tx_7", "n_tx_30", 
+             "avg_tx_1", "avg_tx_7" , "avg_tx_30" , 
+             "n_tx_terminal_1", "n_tx_terminal_7" , "n_tx_terminal_30" , 
+             "tx_terminal_risk_1" , "tx_terminal_risk_7" , "tx_terminal_risk_30" ,
+             "tx_weekend" , "tx_night"
+             )
+print("n features")
+print(length(features))
+```
+
+
+```{r}
+library(rpart)
+
+model.tree = rpart(target ~ ., data=train[, c(features, "target")], 
+                   control=rpart.control(maxdepth=2))
+
+summary(model.tree)
+plot(model.tree)
+text(model.tree, pretty=1)
+
+```
+Now let's compute the metrics of this simple model
+```{r}
+p = predict(model.tree, newdata = test[, features]) # df with 2 column: p(0|x) and p(1|x)
+test$prob_prediction = p[,2]
+head(test)
+```
+
+```{r}
+performance(test, 100, "TX_FRAUD", "target", "prob_prediction", "TX_DATETIME", "CUSTOMER_ID")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
